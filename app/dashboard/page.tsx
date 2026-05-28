@@ -1,772 +1,789 @@
+
+
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { API_BASE, apiFetch, clearToken, getToken } from "../../lib/api";
+import {
+  clearToken,
+  getCurrentStaff,
+  getDashboardSummary,
+  getRecentActivity,
+  getRecentBookings,
+  getRecentUsers,
+  getToken,
+  type DashboardSummary,
+  type RecentActivity,
+  type RecentBooking,
+  type RecentUser,
+  type StaffMe,
+} from "../../lib/api";
 
-type FailureItem = {
-  id: number;
-  type: string;
+type CardTone = "blue" | "indigo" | "sky" | "slate";
+type SummaryCard = {
   title: string;
-  message?: string | null;
-  user_id?: number | null;
-  created_at?: string | null;
-  metadata_json?: string | null;
+  value: number;
+  description: string;
+  icon: string;
+  tone: CardTone;
 };
 
-type UserRow = {
-  id: number;
-  name?: string | null;
-  email?: string | null;
-  picture?: string | null;
-  timezone?: string | null;
-  auth_provider?: string | null;
-  brand_logo_url?: string | null;
-  has_google_connected?: boolean;
-  event_types_count?: number;
-  booking_profiles_count?: number;
-  bookings_count?: number;
-  has_password?: boolean;
+const toneStyles: Record<CardTone, { border: string; bg: string; iconBg: string; iconColor: string }> = {
+  blue: { border: "#bfdbfe", bg: "#eff6ff", iconBg: "#dbeafe", iconColor: "#2563eb" },
+  indigo: { border: "#c7d2fe", bg: "#eef2ff", iconBg: "#e0e7ff", iconColor: "#4f46e5" },
+  sky: { border: "#bae6fd", bg: "#f0f9ff", iconBg: "#e0f2fe", iconColor: "#0284c7" },
+  slate: { border: "#e2e8f0", bg: "#f8fafc", iconBg: "#f1f5f9", iconColor: "#475569" },
 };
 
-type UsersOverview = {
-  summary: {
-    returned: number;
-    google_users: number;
-    email_users: number;
-    connected_google: number;
-    with_logo: number;
-    timezone_set: number;
-  };
-  items: UserRow[];
+const statusStyles: Record<string, { bg: string; color: string; border: string }> = {
+  confirmed: { bg: "#ecfdf5", color: "#047857", border: "#bbf7d0" },
+  completed: { bg: "#eff6ff", color: "#2563eb", border: "#bfdbfe" },
+  pending: { bg: "#fffbeb", color: "#b45309", border: "#fde68a" },
+  cancelled: { bg: "#fef2f2", color: "#b91c1c", border: "#fecaca" },
+  canceled: { bg: "#fef2f2", color: "#b91c1c", border: "#fecaca" },
+  rescheduled: { bg: "#f5f3ff", color: "#6d28d9", border: "#ddd6fe" },
+  default: { bg: "#f8fafc", color: "#475569", border: "#e2e8f0" },
 };
 
-type SegmentItem = { label: string; value: number };
+const INITIAL_SHOW = 5;
+const RECENT_USERS_INITIAL_SHOW = 3;
 
-type DashboardPayload = {
-  generated_at: string;
-  kpis: {
-    users_total: number;
-    bookings_total: number;
-    bookings_24h: number;
-    bookings_7d: number;
-    active_users_30d: number;
-    google_connected_users: number;
-    contacts_total: number;
-    notifications_total: number;
-    unread_notifications: number;
-    profiles_total: number;
-    event_types_total: number;
-    reschedule_requests_total: number;
-    reschedule_open: number;
-    reschedule_completed: number;
-    slot_holds_active: number;
-    booking_audit_events: number;
-    bookings_failed_24h: number;
-    google_sync_failures_24h: number;
-    email_failures_24h: number;
-    setup_completion_pct: number;
-  };
-  segments: {
-    providers: SegmentItem[];
-    booking_status: SegmentItem[];
-    top_timezones: SegmentItem[];
-    notification_types: SegmentItem[];
-  };
-  charts: {
-    user_growth_30d: SegmentItem[];
-    booking_growth_14d: SegmentItem[];
-  };
-  insights: { label: string; value: string | number }[];
-  alerts: { severity: "high" | "medium" | "low"; title: string; body: string }[];
-  top_users: {
-    id: number;
-    name?: string | null;
-    email?: string | null;
-    picture?: string | null;
-    timezone?: string | null;
-    auth_provider?: string | null;
-    bookings_count: number;
-    recent_bookings_7d: number;
-    booking_profiles_count: number;
-    event_types_count: number;
-    has_google_connected: boolean;
-    has_logo: boolean;
-  }[];
-};
-
-
-
-const EMPTY_DASHBOARD: DashboardPayload = {
-  generated_at: "",
-  kpis: {
-    users_total: 0,
-    bookings_total: 0,
-    bookings_24h: 0,
-    bookings_7d: 0,
-    active_users_30d: 0,
-    google_connected_users: 0,
-    contacts_total: 0,
-    notifications_total: 0,
-    unread_notifications: 0,
-    profiles_total: 0,
-    event_types_total: 0,
-    reschedule_requests_total: 0,
-    reschedule_open: 0,
-    reschedule_completed: 0,
-    slot_holds_active: 0,
-    booking_audit_events: 0,
-    bookings_failed_24h: 0,
-    google_sync_failures_24h: 0,
-    email_failures_24h: 0,
-    setup_completion_pct: 0,
-  },
-  segments: {
-    providers: [],
-    booking_status: [],
-    top_timezones: [],
-    notification_types: [],
-  },
-  charts: {
-    user_growth_30d: [],
-    booking_growth_14d: [],
-  },
-  insights: [],
-  alerts: [],
-  top_users: [],
-};
-
-const EMPTY_USERS_OVERVIEW: UsersOverview = {
-  summary: {
-    returned: 0,
-    google_users: 0,
-    email_users: 0,
-    connected_google: 0,
-    with_logo: 0,
-    timezone_set: 0,
-  },
-  items: [],
-};
-
-function normalizeDashboardPayload(raw: any): DashboardPayload {
-  return {
-    ...EMPTY_DASHBOARD,
-    ...(raw || {}),
-    kpis: { ...EMPTY_DASHBOARD.kpis, ...(raw?.kpis || {}) },
-    segments: { ...EMPTY_DASHBOARD.segments, ...(raw?.segments || {}) },
-    charts: { ...EMPTY_DASHBOARD.charts, ...(raw?.charts || {}) },
-    insights: Array.isArray(raw?.insights) ? raw.insights : [],
-    alerts: Array.isArray(raw?.alerts) ? raw.alerts : [],
-    top_users: Array.isArray(raw?.top_users) ? raw.top_users : [],
-  };
-}
-
-function normalizeUsersOverview(raw: any): UsersOverview {
-  return {
-    ...EMPTY_USERS_OVERVIEW,
-    ...(raw || {}),
-    summary: { ...EMPTY_USERS_OVERVIEW.summary, ...(raw?.summary || {}) },
-    items: Array.isArray(raw?.items) ? raw.items : [],
-  };
-}
-const styles = {
-  page: { minHeight: "100vh", background: "linear-gradient(180deg, #f8fbff 0%, #eef5ff 48%, #ffffff 100%)", color: "#172033", fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" },
-  muted: "#64748b",
-  text: "#172033",
-};
-
-function MetricCard({ title, value, sub }: { title: string; value: any; sub?: string }) {
+/* ─── SVG icons ─── */
+function LineIcon({ label }: { label: string }) {
   return (
-    <div style={{ padding: 18, borderRadius: 18, background: "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)", border: "1px solid rgba(37,99,235,0.12)", boxShadow: "0 12px 30px rgba(15,23,42,0.06)" }}>
-      <div style={{ fontSize: 12, color: styles.muted, letterSpacing: 0.2, fontWeight: 600 }}>{title}</div>
-      <div style={{ fontSize: 26, fontWeight: 700, marginTop: 8, color: styles.text, lineHeight: 1.1 }}>{value ?? "—"}</div>
-      {sub ? <div style={{ fontSize: 12, color: styles.muted, marginTop: 8, lineHeight: 1.45 }}>{sub}</div> : null}
+    <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
+      {label === "users" ? (<><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></>)
+        : label === "calendar" ? (<><path d="M8 2v4" /><path d="M16 2v4" /><rect width="18" height="18" x="3" y="4" rx="2" /><path d="M3 10h18" /></>)
+          : label === "clock" ? (<><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></>)
+            : label === "building" ? (<><rect width="16" height="20" x="4" y="2" rx="2" /><path d="M9 22v-4h6v4" /><path d="M8 6h.01" /><path d="M16 6h.01" /><path d="M12 6h.01" /><path d="M12 10h.01" /><path d="M12 14h.01" /><path d="M16 10h.01" /><path d="M16 14h.01" /><path d="M8 10h.01" /><path d="M8 14h.01" /></>)
+              : label === "layers" ? (<><path d="m12 2 9 5-9 5-9-5 9-5Z" /><path d="m3 12 9 5 9-5" /><path d="m3 17 9 5 9-5" /></>)
+                : label === "bell" ? (<><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /></>)
+                  : label === "refresh" ? (<><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M3 21v-5h5" /><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M16 8h5V3" /></>)
+                    : (<><path d="M20 7h-9" /><path d="M14 17H5" /><circle cx="17" cy="17" r="3" /><circle cx="7" cy="7" r="3" /></>)}
+    </svg>
+  );
+}
+
+/* ─── Formatters ─── */
+function formatNumber(value?: number | null): string {
+  const v = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return new Intl.NumberFormat("en-IN").format(v);
+}
+function formatDateTime(value?: string | null): string {
+  if (!value) return "Not available";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(d);
+}
+function formatLabel(value?: string | null): string {
+  if (!value) return "Not available";
+  return value.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+function getUserInitials(name?: string | null, email?: string | null): string {
+  const src = name?.trim() || email?.trim() || "User";
+  const parts = src.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  return src.slice(0, 2).toUpperCase();
+}
+function getPersonLabel(value?: string | { name?: string | null; email?: string | null } | null, fb1?: string | null, fb2?: string | null): string {
+  if (typeof value === "string" && value.trim()) return value;
+  if (value && typeof value === "object") return value.name || value.email || fb1 || fb2 || "System";
+  return fb1 || fb2 || "System";
+}
+function formatMetaPreview(activity: RecentActivity): string {
+  const s = activity.metaSummary || activity.meta_summary;
+  if (s) return s;
+  if (activity.meta && typeof activity.meta === "object") { try { return JSON.stringify(activity.meta); } catch { return "Metadata unavailable"; } }
+  if (typeof activity.meta === "string") return activity.meta;
+  return "No metadata attached";
+}
+function buildCards(summary: DashboardSummary): SummaryCard[] {
+  return [
+    { title: "Total Users", value: summary.users.total, description: "Registered platform users", icon: "users", tone: "blue" },
+    { title: "Total Bookings", value: summary.bookings.total, description: "All-time booking records", icon: "calendar", tone: "indigo" },
+    { title: "Today Bookings", value: summary.bookings.today, description: "Bookings scheduled today", icon: "clock", tone: "sky" },
+    { title: "Upcoming Bookings", value: summary.bookings.upcoming, description: "Future scheduled bookings", icon: "calendar", tone: "blue" },
+    { title: "Organizations", value: summary.enterprise.organizations, description: "Enterprise workspaces", icon: "building", tone: "indigo" },
+    { title: "Teams", value: summary.enterprise.teams, description: "Teams across organizations", icon: "users", tone: "sky" },
+    { title: "Event Types", value: summary.events.eventTypes, description: "Configured event templates", icon: "layers", tone: "blue" },
+    { title: "Group Sessions", value: summary.events.groupSessions, description: "Group event sessions", icon: "calendar", tone: "indigo" },
+    { title: "Unread Notifications", value: summary.system.unreadNotifications, description: "Unread admin alerts", icon: "bell", tone: "sky" },
+    { title: "Open Reschedules", value: summary.system.openRescheduleRequests, description: "Pending reschedule requests", icon: "refresh", tone: "blue" },
+    { title: "Active Slot Holds", value: summary.system.activeSlotHolds, description: "Temporary active holds", icon: "sliders", tone: "slate" },
+  ];
+}
+
+/* ─── Load More Button ─── */
+function LoadMoreButton({ shown, total, onLoad }: { shown: number; total: number; onLoad: () => void }) {
+  if (shown >= total) return null;
+  return (
+    <div style={{ padding: "16px 20px", borderTop: "1px solid #e2e8f0", display: "flex", flexDirection: "column", alignItems: "center", gap: 10, background: "#fafcff" }}>
+      {/* <span style={{ color: "#64748b", fontSize: 13 }}>
+        Showing <strong style={{ color: "#0f172a" }}>{shown}</strong> of <strong style={{ color: "#0f172a" }}>{total}</strong>
+      </span> */}
+      <button
+        type="button"
+        onClick={onLoad}
+        className="load-more-btn"
+        style={{ border: "1px solid #bfdbfe", borderRadius: 999, background: "#ffffff", color: "#2563eb", padding: "9px 28px", fontSize: 13, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", gap: 7 }}
+      >
+        Load more
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+      </button>
     </div>
   );
 }
 
-function SmallMetric({ label, value }: { label: string; value: any }) {
+/* ─── Summary Card ─── */
+function SummaryCardView({ card, compact = false }: { card: SummaryCard; compact?: boolean }) {
+  const tone = toneStyles[card.tone];
   return (
-    <div style={{ padding: 15, borderRadius: 16, background: "#ffffff", border: "1px solid rgba(37,99,235,0.10)" }}>
-      <div style={{ fontSize: 12, color: styles.muted, fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: 21, fontWeight: 700, marginTop: 6, color: styles.text }}>{value ?? "—"}</div>
-    </div>
-  );
-}
-
-function FilterButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
-  return (
-    <button onClick={onClick} style={{ padding: "9px 14px", borderRadius: 12, border: active ? "1px solid rgba(37,99,235,0.35)" : "1px solid rgba(148,163,184,0.25)", background: active ? "#2563eb" : "#ffffff", color: active ? "#ffffff" : "#334155", cursor: "pointer", fontWeight: 600, boxShadow: active ? "0 10px 22px rgba(37,99,235,0.18)" : "none" }}>
-      {label}
-    </button>
-  );
-}
-
-function AlertCard({ severity, title, body }: { severity: "high" | "medium" | "low"; title: string; body: string }) {
-  const tone = severity === "high" ? "239,68,68" : severity === "medium" ? "245,158,11" : "16,185,129";
-  return (
-    <div style={{ padding: 16, borderRadius: 16, background: `rgba(${tone},0.08)`, border: `1px solid rgba(${tone},0.22)` }}>
-      <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: `rgb(${tone})`, letterSpacing: 0.5 }}>{severity}</div>
-      <div style={{ fontSize: 14, fontWeight: 700, marginTop: 6, color: styles.text }}>{title}</div>
-      <div style={{ fontSize: 13, color: styles.muted, marginTop: 6, lineHeight: 1.55 }}>{body}</div>
-    </div>
-  );
-}
-
-function ProgressBars({ items }: { items?: SegmentItem[] }) {
-  const max = Math.max(...(items?.map((item) => item.value) || [1]), 1);
-  return (
-    <div style={{ display: "grid", gap: 11 }}>
-      {(items || []).map((item) => (
-        <div key={item.label}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, marginBottom: 7 }}>
-            <span style={{ color: styles.muted, fontWeight: 600 }}>{item.label}</span>
-            <span style={{ fontWeight: 700, color: styles.text }}>{item.value}</span>
-          </div>
-          <div style={{ height: 9, borderRadius: 999, background: "#e8effc", overflow: "hidden" }}>
-            <div style={{ width: `${(item.value / max) * 100}%`, height: "100%", borderRadius: 999, background: "linear-gradient(90deg, #60a5fa, #2563eb)" }} />
-          </div>
+    <article
+      style={{
+        minWidth: 0,
+        border: "1px solid #e8eef8",
+        background: "#ffffff",
+        borderRadius: compact ? 16 : 20,
+        padding: compact ? "16px" : "20px",
+        boxShadow: "0 1px 4px rgba(15,23,42,0.04)",
+        minHeight: compact ? 112 : 132,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <p style={{ margin: 0, color: "#64748b", fontSize: compact ? 12 : 13, fontWeight: 500, letterSpacing: "-0.01em" }}>{card.title}</p>
+          <p style={{ margin: "8px 0 0", color: "#0f172a", fontSize: compact ? 26 : 34, lineHeight: 1, fontWeight: 700, letterSpacing: "-0.05em" }}>{formatNumber(card.value)}</p>
         </div>
-      ))}
-    </div>
-  );
-}
-
-function SparkBars({ items }: { items?: SegmentItem[] }) {
-  const max = Math.max(...(items?.map((item) => item.value) || [1]), 1);
-  return (
-    <div style={{ display: "flex", alignItems: "end", gap: 7, height: 178, paddingTop: 8 }}>
-      {(items || []).map((item) => (
-        <div key={item.label} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-          <div title={`${item.label}: ${item.value}`} style={{ width: "100%", height: `${Math.max((item.value / max) * 100, item.value > 0 ? 8 : 2)}%`, minHeight: item.value > 0 ? 8 : 2, borderRadius: 10, background: "linear-gradient(180deg, #60a5fa, #2563eb)", boxShadow: "0 8px 18px rgba(37,99,235,0.16)" }} />
-          <div style={{ fontSize: 10, color: "#7890ad", writingMode: "vertical-rl", transform: "rotate(180deg)", height: 56, overflow: "hidden" }}>{item.label.slice(5)}</div>
+        <div style={{ flexShrink: 0, width: compact ? 36 : 40, height: compact ? 36 : 40, borderRadius: compact ? 11 : 12, display: "grid", placeItems: "center", background: tone.iconBg, color: tone.iconColor }}>
+          <LineIcon label={card.icon} />
         </div>
-      ))}
-    </div>
+      </div>
+      <p style={{ margin: compact ? "10px 0 0" : "12px 0 0", color: "#64748b", fontSize: compact ? 12 : 12.5, lineHeight: 1.45, fontWeight: 400 }}>{card.description}</p>
+    </article>
   );
 }
 
-function Avatar({ name, email, picture }: { name?: string | null; email?: string | null; picture?: string | null }) {
-  if (picture) return <img src={picture} alt={name || email || "User"} style={{ width: 38, height: 38, borderRadius: 12, objectFit: "cover", border: "1px solid rgba(37,99,235,0.12)" }} />;
-  const seed = (name || email || "U").trim().charAt(0).toUpperCase() || "U";
-  return <div style={{ width: 38, height: 38, borderRadius: 12, display: "grid", placeItems: "center", background: "linear-gradient(135deg, #dbeafe, #eff6ff)", border: "1px solid rgba(37,99,235,0.16)", color: "#1d4ed8", fontWeight: 700 }}>{seed}</div>;
-}
-
-function Pill({ label, active, good }: { label: string; active: boolean; good?: boolean }) {
+/* ─── Status / Provider chips ─── */
+function StatusChip({ status }: { status?: string | null }) {
+  const key = String(status || "default").toLowerCase();
+  const s = statusStyles[key] || statusStyles.default;
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", padding: "6px 10px", borderRadius: 999, fontSize: 11, fontWeight: 700, color: active ? (good ? "#047857" : "#1d4ed8") : "#64748b", background: active ? (good ? "rgba(16,185,129,0.10)" : "rgba(37,99,235,0.10)") : "rgba(148,163,184,0.12)", border: active ? (good ? "1px solid rgba(16,185,129,0.22)" : "1px solid rgba(37,99,235,0.22)") : "1px solid rgba(148,163,184,0.20)" }}>
-      {label}
+    <span style={{ display: "inline-flex", alignItems: "center", border: `1px solid ${s.border}`, background: s.bg, color: s.color, borderRadius: 999, padding: "4px 10px", fontSize: 12, fontWeight: 500, whiteSpace: "nowrap" }}>
+      {formatLabel(status || "Unknown")}
+    </span>
+  );
+}
+function ProviderBadge({ provider }: { provider?: string | null }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", border: "1px solid #bfdbfe", background: "#eff6ff", color: "#2563eb", borderRadius: 999, padding: "4px 10px", fontSize: 12, fontWeight: 500, whiteSpace: "nowrap" }}>
+      {formatLabel(provider || "unknown")}
     </span>
   );
 }
 
-export default function Dashboard() {
-  const router = useRouter();
-  const [me, setMe] = useState<any>(null);
-  const [dashboard, setDashboard] = useState<DashboardPayload>(EMPTY_DASHBOARD);
-  const [error, setError] = useState<string | null>(null);
-  const [kind, setKind] = useState<"all" | "google" | "email">("all");
-  const [failures, setFailures] = useState<FailureItem[]>([]);
-  const [loadingFailures, setLoadingFailures] = useState(false);
-  const [userSearch, setUserSearch] = useState("");
-  const [usersOverview, setUsersOverview] = useState<UsersOverview>(EMPTY_USERS_OVERVIEW);
-  const [loadingUsers, setLoadingUsers] = useState(false);
+/* ─── Skeletons ─── */
+function TableSkeleton() {
+  return (
+    <div style={{ display: "grid", gap: 10, padding: 18 }}>
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div key={i} style={{ height: 44, borderRadius: 12, background: "linear-gradient(90deg,#f1f5f9 0%,#eaf2ff 50%,#f1f5f9 100%)" }} />
+      ))}
+    </div>
+  );
+}
+function CardSkeletonGrid() {
+  return (
+    <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(min(100%,220px),1fr))", gap: 14, width: "100%" }}>
+      {Array.from({ length: 11 }).map((_, i) => (
+        <article key={i} style={{ minWidth: 0, border: "1px solid #dbeafe", background: "#ffffff", borderRadius: 20, padding: "20px", boxShadow: "0 2px 12px rgba(15,23,42,0.05)" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ width: "55%", height: 12, borderRadius: 999, background: "#eaf2ff" }} />
+              <div style={{ width: "40%", height: 26, borderRadius: 10, background: "#f1f5f9", marginTop: 10 }} />
+            </div>
+            <div style={{ width: 40, height: 40, borderRadius: 12, background: "#dbeafe", flexShrink: 0 }} />
+          </div>
+          <div style={{ width: "72%", height: 11, borderRadius: 999, background: "#f1f5f9", marginTop: 14 }} />
+        </article>
+      ))}
+    </section>
+  );
+}
 
-  const hasToken = useMemo(() => !!getToken(), []);
+/* ─── Error card ─── */
+function ApiErrorCard({ title, message, onRetry }: { title: string; message: string; onRetry?: () => void }) {
+  return (
+    <section style={{ border: "1px solid #fecaca", background: "#fff7f7", borderRadius: 20, padding: "16px 20px", color: "#991b1b", marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ minWidth: 0 }}>
+          <h2 style={{ margin: "0 0 5px", fontSize: 15, fontWeight: 600 }}>{title}</h2>
+          <p style={{ margin: 0, fontSize: 12, fontWeight: 500, letterSpacing: "-0.01em", overflowWrap: "anywhere" }}>{message}</p>
+        </div>
+        {onRetry && (
+          <button type="button" onClick={onRetry} style={{ border: "1px solid #fecaca", borderRadius: 999, background: "#ffffff", color: "#991b1b", padding: "7px 14px", fontSize: 13, fontWeight: 500, cursor: "pointer" }}>Retry</button>
+        )}
+      </div>
+    </section>
+  );
+}
 
-  async function loadDashboard() {
-    const res = await apiFetch("/ops/ceo-dashboard");
-    const data = await res.json();
-    setDashboard(normalizeDashboardPayload(data));
-  }
+/* ─── Section shell ─── */
+function SectionShell({ title, description, badge, children }: { title: string; description: string; badge?: string; children: ReactNode }) {
+  return (
+    <section style={{ marginTop: 24, border: "1px solid #dbeafe", background: "#ffffff", borderRadius: 18, boxShadow: "0 2px 16px rgba(15,23,42,0.06)", overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", padding: "16px 20px", borderBottom: "1px solid #e2e8f0", background: "#fafcff" }}>
+        <div style={{ minWidth: 0 }}>
+          <h2 style={{ margin: 0, color: "#0f172a", fontSize: 17, fontWeight: 600, letterSpacing: "-0.02em" }}>{title}</h2>
+          <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: 13, fontWeight: 400 }}>{description}</p>
+        </div>
+        {badge && (
+          <span style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#2563eb", borderRadius: 999, padding: "5px 12px", fontSize: 12, fontWeight: 500 }}>{badge}</span>
+        )}
+      </div>
+      {children}
+    </section>
+  );
+}
 
-  async function loadFailures(nextKind: "all" | "google" | "email") {
-    setLoadingFailures(true);
-    try {
-      const res = await apiFetch(`/ops/failures/recent?kind=${nextKind}&limit=20`);
-      const data = await res.json();
-      setFailures(data.items || []);
-    } catch (e: any) {
-      setError(e?.message || "Failed to load recent failures");
-    } finally {
-      setLoadingFailures(false);
-    }
-  }
+/* ─── Recent Bookings ─── */
+function RecentBookingsTable({ bookings, loading }: { bookings: RecentBooking[]; loading: boolean }) {
+  const [shown, setShown] = useState(INITIAL_SHOW);
+  useEffect(() => { setShown(INITIAL_SHOW); }, [bookings]);
 
-  async function loadUsers(search = "") {
-    setLoadingUsers(true);
-    try {
-      const qs = new URLSearchParams({ limit: "24" });
-      if (search.trim()) qs.set("q", search.trim());
-      const res = await apiFetch(`/ops/users/overview?${qs.toString()}`);
-      const data = await res.json();
-      setUsersOverview(normalizeUsersOverview(data));
-    } catch (e: any) {
-      setError(e?.message || "Failed to load users overview");
-    } finally {
-      setLoadingUsers(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!hasToken) {
-      router.replace("/login");
-      return;
-    }
-
-    (async () => {
-      try {
-        const meRes = await apiFetch("/ops/me");
-        setMe(await meRes.json());
-        await Promise.all([loadDashboard(), loadFailures("all"), loadUsers("")]);
-      } catch (e: any) {
-        setError(e?.message || "Failed to load");
-        clearToken();
-        router.replace("/login");
-      }
-    })();
-  }, [router, hasToken]);
-
-  useEffect(() => {
-    if (!hasToken) return;
-
-    const token = getToken();
-    if (!token) return;
-
-    const es = new EventSource(`${API_BASE}/ops/live?token=${encodeURIComponent(token)}`);
-    es.addEventListener("kpis", () => {
-      loadDashboard().catch(() => null);
-    });
-    es.onerror = () => {
-      // ignore noisy reconnect errors
-    };
-
-    return () => es.close();
-  }, [hasToken]);
-
-  useEffect(() => {
-    if (!hasToken) return;
-    loadFailures(kind);
-  }, [kind]);
-
-  useEffect(() => {
-    if (!hasToken) return;
-    const t = setTimeout(() => {
-      loadUsers(userSearch);
-    }, 300);
-    return () => clearTimeout(t);
-  }, [userSearch]);
-
-  async function logout() {
-    try {
-      await apiFetch("/ops/auth/logout", { method: "POST" });
-    } catch {
-      // ignore
-    }
-    clearToken();
-    router.replace("/login");
-  }
+  const visible = bookings.slice(0, shown);
 
   return (
-    <div style={styles.page}>
-      <div
-        style={{
-          position: "fixed",
-          inset: 0,
-          background:
-            "radial-gradient(circle at 12% 0%, rgba(37,99,235,0.12), transparent 30%), radial-gradient(circle at 82% 8%, rgba(96,165,250,0.14), transparent 26%)",
-          zIndex: 0,
-        }}
-      />
-
-      <div
-        style={{
-          position: "sticky",
-          top: 0,
-          zIndex: 20,
-          borderBottom: "1px solid rgba(37,99,235,0.10)",
-          background: "rgba(255,255,255,0.86)",
-          backdropFilter: "blur(14px)",
-        }}
-      >
-        <div
-          style={{
-            maxWidth: 1360,
-            margin: "0 auto",
-            padding: "16px 20px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 16,
-            flexWrap: "wrap",
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 12, color: "#2563eb", fontWeight: 700, letterSpacing: 1.4 }}>SLOTLY OPERATIONS</div>
-            <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>Operations Dashboard</div>
-            <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
-              {me ? `${me.email} • ${me.role}` : "Loading staff context..."}
-            </div>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <div
-              style={{
-                padding: "10px 14px",
-                borderRadius: 14,
-                border: "1px solid rgba(37,99,235,0.12)",
-                background: "#f8fbff",
-                fontSize: 12,
-                color: "#64748b",
-              }}
-            >
-              Last refresh: {dashboard?.generated_at ? new Date(dashboard.generated_at).toLocaleString() : "—"}
-            </div>
-            <button
-              onClick={logout}
-              style={{
-                padding: "10px 14px",
-                borderRadius: 14,
-                border: "1px solid rgba(37,99,235,0.14)",
-                background: "rgba(255,255,255,0.06)",
-                color: "#ffffff",
-                cursor: "pointer",
-                fontWeight: 700,
-              }}
-            >
-              Logout
-            </button>
-          </div>
+    <SectionShell title="Recent bookings" description="Latest bookings sorted newest first." badge={`Latest ${bookings.length || 10}`}>
+      {loading ? <TableSkeleton /> : bookings.length === 0 ? (
+        <div style={{ padding: 32, textAlign: "center" }}>
+          <h3 style={{ margin: 0, color: "#0f172a", fontSize: 15, fontWeight: 600 }}>No recent bookings</h3>
+          <p style={{ margin: "8px auto 0", color: "#64748b", fontSize: 13, fontWeight: 400, maxWidth: 400 }}>Bookings will appear here when users start creating appointments.</p>
         </div>
-      </div>
-
-      <div style={{ position: "relative", zIndex: 1, maxWidth: 1360, margin: "0 auto", padding: 20 }}>
-        {error ? (
-          <div
-            style={{
-              padding: 14,
-              borderRadius: 14,
-              background: "rgba(239,68,68,0.08)",
-              border: "1px solid rgba(239,68,68,0.25)",
-              marginBottom: 16,
-            }}
-          >
-            {error}
-          </div>
-        ) : null}
-
-        <section
-          style={{
-            padding: 24,
-            borderRadius: 24,
-            background: "linear-gradient(135deg, #ffffff 0%, #f4f8ff 100%)",
-            border: "1px solid rgba(37,99,235,0.10)",
-            boxShadow: "0 20px 55px rgba(15,23,42,0.08)",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 18, flexWrap: "wrap", marginBottom: 18 }}>
-            <div>
-              <div style={{ fontSize: 25, fontWeight: 700, lineHeight: 1.15 }}>Business overview</div>
-              <div style={{ fontSize: 14, color: "#64748b", marginTop: 8, maxWidth: 760 }}>
-                Operational reporting across users, bookings, event types, contacts, notifications, reschedules, and system health.
-              </div>
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
-            <MetricCard title="Total Users" value={dashboard?.kpis.users_total} sub={`${dashboard?.kpis.active_users_30d ?? 0} active in last 30d`} />
-            <MetricCard title="Total Bookings" value={dashboard?.kpis.bookings_total} sub={`${dashboard?.kpis.bookings_7d ?? 0} in last 7d`} />
-            <MetricCard title="Bookings Today (24h)" value={dashboard?.kpis.bookings_24h} sub={`${dashboard?.kpis.bookings_failed_24h ?? 0} failed/cancelled`} />
-            <MetricCard title="Google Connected Users" value={dashboard?.kpis.google_connected_users} sub={`${dashboard?.kpis.google_sync_failures_24h ?? 0} failures in 24h`} />
-            <MetricCard title="Setup Completion" value={`${dashboard?.kpis.setup_completion_pct ?? 0}%`} sub={`${dashboard?.kpis.profiles_total ?? 0} profiles • ${dashboard?.kpis.event_types_total ?? 0} event types`} />
-          </div>
-        </section>
-
-        <section style={{ marginTop: 18, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 18 }}>
-          <div
-            style={{
-              padding: 22,
-              borderRadius: 24,
-              background: "rgba(255,255,255,0.92)",
-              border: "1px solid rgba(37,99,235,0.10)",
-            }}
-          >
-            <div style={{ fontSize: 16, fontWeight: 700 }}>Booking trend · last 14 days</div>
-            <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>Demand movement and booking activity pattern</div>
-            <div style={{ marginTop: 18 }}>
-              <SparkBars items={dashboard?.charts.booking_growth_14d} />
-            </div>
-          </div>
-
-          <div
-            style={{
-              padding: 22,
-              borderRadius: 24,
-              background: "rgba(255,255,255,0.92)",
-              border: "1px solid rgba(37,99,235,0.10)",
-            }}
-          >
-            <div style={{ fontSize: 16, fontWeight: 700 }}>Priority alerts</div>
-            <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>Derived from operational signals</div>
-            <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
-              {(dashboard?.alerts || []).map((alert, idx) => (
-                <AlertCard key={`${alert.title}-${idx}`} severity={alert.severity} title={alert.title} body={alert.body} />
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section style={{ marginTop: 18, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
-          <SmallMetric label="Contacts" value={dashboard?.kpis.contacts_total} />
-          <SmallMetric label="Notifications" value={dashboard?.kpis.notifications_total} />
-          <SmallMetric label="Unread Notifications" value={dashboard?.kpis.unread_notifications} />
-          <SmallMetric label="Active Slot Holds" value={dashboard?.kpis.slot_holds_active} />
-          <SmallMetric label="Reschedule Requests" value={dashboard?.kpis.reschedule_requests_total} />
-          <SmallMetric label="Open Reschedules" value={dashboard?.kpis.reschedule_open} />
-          <SmallMetric label="Completed Reschedules" value={dashboard?.kpis.reschedule_completed} />
-          <SmallMetric label="Booking Audit Events" value={dashboard?.kpis.booking_audit_events} />
-        </section>
-
-        <section style={{ marginTop: 18, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 18 }}>
-          <div style={{ padding: 22, borderRadius: 24, background: "rgba(255,255,255,0.92)", border: "1px solid rgba(37,99,235,0.10)" }}>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>Provider split</div>
-            <div style={{ marginTop: 16 }}>
-              <ProgressBars items={dashboard?.segments.providers} />
-            </div>
-          </div>
-
-          <div style={{ padding: 22, borderRadius: 24, background: "rgba(255,255,255,0.92)", border: "1px solid rgba(37,99,235,0.10)" }}>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>Booking status mix</div>
-            <div style={{ marginTop: 16 }}>
-              <ProgressBars items={dashboard?.segments.booking_status} />
-            </div>
-          </div>
-
-          <div style={{ padding: 22, borderRadius: 24, background: "rgba(255,255,255,0.92)", border: "1px solid rgba(37,99,235,0.10)" }}>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>Top timezones</div>
-            <div style={{ marginTop: 16 }}>
-              <ProgressBars items={dashboard?.segments.top_timezones} />
-            </div>
-          </div>
-        </section>
-
-        <section
-          style={{
-            marginTop: 18,
-            padding: 22,
-            borderRadius: 24,
-            background: "rgba(255,255,255,0.92)",
-            border: "1px solid rgba(37,99,235,0.10)",
-          }}
-        >
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 18 }}>
-            <div>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>Executive insights</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12, marginTop: 16 }}>
-                {(dashboard?.insights || []).map((insight) => (
-                  <div key={insight.label} style={{ padding: 16, borderRadius: 16, background: "#f8fbff", border: "1px solid rgba(37,99,235,0.10)" }}>
-                    <div style={{ fontSize: 12, color: "#64748b" }}>{insight.label}</div>
-                    <div style={{ fontSize: 24, fontWeight: 700, marginTop: 8 }}>{insight.value}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>Top users by booking activity</div>
-              <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
-                {(dashboard?.top_users || []).map((user) => (
-                  <div key={user.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: 14, borderRadius: 16, background: "#f8fbff", border: "1px solid rgba(37,99,235,0.10)" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                      <Avatar name={user.name} email={user.email} picture={user.picture} />
-                      <div>
-                        <div style={{ fontSize: 14, fontWeight: 700 }}>{user.name || "Unnamed user"}</div>
-                        <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{user.email || "—"}</div>
-                      </div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 16, fontWeight: 700 }}>{user.bookings_count}</div>
-                      <div style={{ fontSize: 11, color: "#64748b" }}>{user.recent_bookings_7d} in last 7d</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section
-          style={{
-            marginTop: 18,
-            padding: 22,
-            borderRadius: 24,
-            background: "rgba(255,255,255,0.92)",
-            border: "1px solid rgba(37,99,235,0.10)",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-            <div>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>User directory</div>
-              <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
-                Search users with onboarding, provider, and booking rollups.
-              </div>
-            </div>
-
-            <input
-              value={userSearch}
-              onChange={(e) => setUserSearch(e.target.value)}
-              placeholder="Search by name or email"
-              style={{
-                width: 320,
-                maxWidth: "100%",
-                padding: "11px 14px",
-                borderRadius: 14,
-                border: "1px solid rgba(37,99,235,0.12)",
-                background: "#ffffff",
-                color: "#ffffff",
-                outline: "none",
-              }}
-            />
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginTop: 16 }}>
-            <SmallMetric label="Visible rows" value={usersOverview?.summary.returned} />
-            <SmallMetric label="Google users" value={usersOverview?.summary.google_users} />
-            <SmallMetric label="Email users" value={usersOverview?.summary.email_users} />
-            <SmallMetric label="Google connected" value={usersOverview?.summary.connected_google} />
-            <SmallMetric label="Timezone set" value={usersOverview?.summary.timezone_set} />
-            <SmallMetric label="Logo uploaded" value={usersOverview?.summary.with_logo} />
-          </div>
-
-          <div style={{ marginTop: 16, overflowX: "auto", borderRadius: 18, border: "1px solid rgba(37,99,235,0.10)" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1160 }}>
+      ) : (
+        <>
+          <div style={{ width: "100%", overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+            <table style={{ width: "100%", minWidth: 680, borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
-                <tr style={{ background: "#f8fbff", textAlign: "left" }}>
-                  {[
-                    "User",
-                    "Provider",
-                    "Timezone",
-                    "Profiles",
-                    "Event Types",
-                    "Bookings",
-                    "Google",
-                    "Brand",
-                    "Security",
-                  ].map((head) => (
-                    <th key={head} style={{ padding: "14px 14px", fontSize: 12, color: "#64748b" }}>
-                      {head}
-                    </th>
+                <tr style={{ background: "#f8fafc", color: "#475569" }}>
+                  {["Guest", "Host", "Date & Time", "Meeting Mode", "Org/Team"].map((h) => (
+                    <th key={h} style={{ padding: "11px 16px", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: "1px solid #e2e8f0", textAlign: "left", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {loadingUsers ? (
-                  <tr>
-                    <td colSpan={9} style={{ padding: 18, color: "#64748b" }}>Loading users...</td>
-                  </tr>
-                ) : !usersOverview?.items?.length ? (
-                  <tr>
-                    <td colSpan={9} style={{ padding: 18, color: "#64748b" }}>No users found.</td>
-                  </tr>
-                ) : (
-                  usersOverview.items.map((user) => (
-                    <tr key={user.id} style={{ borderTop: "1px solid rgba(37,99,235,0.08)", verticalAlign: "top" }}>
-                      <td style={{ padding: 14 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                          <Avatar name={user.name} email={user.email} picture={user.picture} />
-                          <div>
-                            <div style={{ fontWeight: 700, fontSize: 14 }}>{user.name || "Unnamed user"}</div>
-                            <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{user.email || "—"}</div>
-                            <div style={{ fontSize: 11, color: "rgba(148,163,184,0.9)", marginTop: 6 }}>User ID #{user.id}</div>
-                          </div>
-                        </div>
+                {visible.map((booking) => {
+                  const host = typeof booking.hostUser === "string" ? booking.hostUser : booking.hostUser?.name || booking.hostUser?.email || booking.hostName || booking.hostEmail || "Not assigned";
+                  const guestName = booking.guestName || "Guest";
+                  const guestEmail = booking.guestEmail || "Email not available";
+                  const orgTeam = [booking.organization, booking.team].filter(Boolean).join(" / ") || "Personal";
+                  return (
+                    <tr key={String(booking.bookingId || booking.id)} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                      <td style={{ padding: "13px 16px", verticalAlign: "top", maxWidth: 240 }}>
+                        <div style={{ color: "#0f172a", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{guestName}</div>
+                        <div title={guestEmail} style={{ marginTop: 3, color: "#64748b", fontSize: 12, fontWeight: 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{guestEmail}</div>
                       </td>
-                      <td style={{ padding: 14 }}><Pill label={(user.auth_provider || "unknown").toUpperCase()} active={true} /></td>
-                      <td style={{ padding: 14, fontSize: 13 }}>{user.timezone || "—"}</td>
-                      <td style={{ padding: 14, fontSize: 13, fontWeight: 700 }}>{user.booking_profiles_count ?? 0}</td>
-                      <td style={{ padding: 14, fontSize: 13, fontWeight: 700 }}>{user.event_types_count ?? 0}</td>
-                      <td style={{ padding: 14, fontSize: 13, fontWeight: 700 }}>{user.bookings_count ?? 0}</td>
-                      <td style={{ padding: 14 }}><Pill label={user.has_google_connected ? "Connected" : "Not connected"} active={!!user.has_google_connected} good={true} /></td>
-                      <td style={{ padding: 14 }}><Pill label={user.brand_logo_url ? "Logo" : "No logo"} active={!!user.brand_logo_url} /></td>
-                      <td style={{ padding: 14 }}><Pill label={user.has_password ? "Password set" : "No password"} active={!!user.has_password} /></td>
+                      <td style={{ padding: "13px 16px", color: "#334155", fontWeight: 400, verticalAlign: "top", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={host}>{host}</td>
+                      <td style={{ padding: "13px 16px", verticalAlign: "top", whiteSpace: "nowrap" }}>
+                        <div style={{ color: "#334155", fontWeight: 400 }}>{formatDateTime(booking.startTime)}</div>
+                        <div style={{ marginTop: 3, color: "#64748b", fontSize: 12, fontWeight: 400 }}>Ends {formatDateTime(booking.endTime)}</div>
+                      </td>
+                      <td style={{ padding: "13px 16px", color: "#334155", fontWeight: 400, verticalAlign: "top", whiteSpace: "nowrap" }}>{formatLabel(booking.meetingMode)}</td>
+                      <td style={{ padding: "13px 16px", color: "#334155", fontWeight: 400, verticalAlign: "top", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={orgTeam}>{orgTeam}</td>
                     </tr>
-                  ))
-                )}
+                  );
+                })}
               </tbody>
             </table>
           </div>
-        </section>
+          <LoadMoreButton shown={shown} total={bookings.length} onLoad={() => setShown(bookings.length)} />
+        </>
+      )}
+    </SectionShell>
+  );
+}
 
-        <section
-          style={{
-            marginTop: 18,
-            padding: 22,
-            borderRadius: 24,
-            background: "rgba(255,255,255,0.92)",
-            border: "1px solid rgba(37,99,235,0.10)",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-            <div>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>Recent failure events</div>
-              <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
-                Filtered operational issues from system notifications.
-              </div>
-            </div>
+/* ─── Recent Users ─── */
+function RecentUsersSection({ users, loading }: { users: RecentUser[]; loading: boolean }) {
+  const [shown, setShown] = useState(RECENT_USERS_INITIAL_SHOW);
+  const sectionRef = useRef<HTMLDivElement>(null);
 
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <FilterButton active={kind === "all"} label="All" onClick={() => setKind("all")} />
-              <FilterButton active={kind === "google"} label="Google" onClick={() => setKind("google")} />
-              <FilterButton active={kind === "email"} label="Email" onClick={() => setKind("email")} />
-            </div>
+  // Reset recent users to 3 when new data arrives
+  useEffect(() => { setShown(RECENT_USERS_INITIAL_SHOW); }, [users]);
+
+  // Auto-collapse recent users back to 3 when section scrolls fully out of view
+  useEffect(() => {
+    if (shown <= RECENT_USERS_INITIAL_SHOW) return;
+    const el = sectionRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (!entry.isIntersecting) setShown(RECENT_USERS_INITIAL_SHOW); },
+      { threshold: 0, rootMargin: "0px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [shown]);
+
+  const visible = users.slice(0, shown);
+
+  return (
+    <div ref={sectionRef}>
+      <SectionShell title="Recent users" description="Latest registered users with safe public admin fields only." badge={`Latest ${users.length || 10}`}>
+        {loading ? <TableSkeleton /> : users.length === 0 ? (
+          <div style={{ padding: 32, textAlign: "center" }}>
+            <h3 style={{ margin: 0, color: "#0f172a", fontSize: 15, fontWeight: 600 }}>No recent users</h3>
+            <p style={{ margin: "8px auto 0", color: "#64748b", fontSize: 13, fontWeight: 400, maxWidth: 400 }}>Users will appear here after accounts are created.</p>
           </div>
+        ) : (
+          <>
+            {/* Single-column list */}
+            <div style={{ padding: "6px 0" }}>
+              {visible.map((user, idx) => {
+                const name = user.name || "Unnamed user";
+                const email = user.email || "Email not available";
+                return (
+                  <div
+                    key={String(user.userId || user.id || email)}
+                    style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 20px", borderBottom: idx < visible.length - 1 ? "1px solid #f1f5f9" : "none", minWidth: 0 }}
+                  >
+                    {/* Avatar */}
+                    {user.picture ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={user.picture} alt={name} onError={(e) => { e.currentTarget.style.display = "none"; }} style={{ width: 42, height: 42, borderRadius: 12, objectFit: "cover", border: "1px solid #dbeafe", background: "#eff6ff", flexShrink: 0 }} />
+                    ) : (
+                      <div style={{ width: 42, height: 42, borderRadius: 12, display: "grid", placeItems: "center", border: "1px solid #bfdbfe", background: "#eff6ff", color: "#2563eb", fontWeight: 600, fontSize: 14, flexShrink: 0 }}>{getUserInitials(user.name, user.email)}</div>
+                    )}
 
-          <div style={{ marginTop: 16, overflowX: "auto", borderRadius: 18, border: "1px solid rgba(37,99,235,0.10)" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
-              <thead>
-                <tr style={{ background: "#f8fbff", textAlign: "left" }}>
-                  <th style={{ padding: "14px 12px", fontSize: 12, color: "#64748b" }}>Time</th>
-                  <th style={{ padding: "14px 12px", fontSize: 12, color: "#64748b" }}>Type</th>
-                  <th style={{ padding: "14px 12px", fontSize: 12, color: "#64748b" }}>Title</th>
-                  <th style={{ padding: "14px 12px", fontSize: 12, color: "#64748b" }}>Message</th>
-                  <th style={{ padding: "14px 12px", fontSize: 12, color: "#64748b" }}>User ID</th>
-                  <th style={{ padding: "14px 12px", fontSize: 12, color: "#64748b" }}>Metadata</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loadingFailures ? (
-                  <tr><td colSpan={6} style={{ padding: 18, color: "#64748b" }}>Loading failures...</td></tr>
-                ) : failures.length === 0 ? (
-                  <tr><td colSpan={6} style={{ padding: 18, color: "#64748b" }}>No failure records found.</td></tr>
-                ) : (
-                  failures.map((item) => (
-                    <tr key={item.id} style={{ borderTop: "1px solid rgba(37,99,235,0.08)", verticalAlign: "top" }}>
-                      <td style={{ padding: "14px 12px", fontSize: 12, whiteSpace: "nowrap" }}>{item.created_at ? new Date(item.created_at).toLocaleString() : "—"}</td>
-                      <td style={{ padding: "14px 12px", fontSize: 12 }}>
-                        <span
+                    {/* Name + email */}
+                    <div style={{ minWidth: 0, flex: "1 1 160px" }}>
+                      <div title={name} style={{ color: "#0f172a", fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
+                      <div title={email} style={{ marginTop: 3, color: "#64748b", fontSize: 12, fontWeight: 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</div>
+                    </div>
+
+                    {/* Provider + timezone */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      <ProviderBadge provider={user.authProvider} />
+                      <span title={user.timezone || "Timezone not available"} style={{ display: "inline-flex", alignItems: "center", border: "1px solid #e2e8f0", background: "#f8fafc", color: "#475569", borderRadius: 999, padding: "4px 10px", fontSize: 12, fontWeight: 400, whiteSpace: "nowrap", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {user.timezone || "Timezone not set"}
+                      </span>
+                    </div>
+
+                    {/* Stats */}
+                    <div
+                      className="recent-user-stats"
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "flex-end",
+                        gap: 8,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {[
+                        { label: "Bookings", value: user.totalBookings },
+                        { label: "Event Types", value: user.totalEventTypes },
+                      ].map(({ label, value }) => (
+                        <div
+                          key={label}
                           style={{
-                            display: "inline-block",
-                            padding: "5px 9px",
-                            borderRadius: 999,
-                            background: item.type === "email.failed" ? "rgba(239,68,68,0.18)" : "rgba(245,158,11,0.18)",
-                            border: item.type === "email.failed" ? "1px solid rgba(239,68,68,0.30)" : "1px solid rgba(245,158,11,0.30)",
+                            minWidth: 76,
+                            minHeight: 44,
+                            display: "grid",
+                            alignContent: "center",
+                            border: "1px solid #dbeafe",
+                            borderRadius: 12,
+                            padding: "7px 10px",
+                            background: "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)",
+                            textAlign: "center",
+                            boxShadow: "0 8px 18px rgba(15, 23, 42, 0.035)",
                           }}
                         >
-                          {item.type}
-                        </span>
-                      </td>
-                      <td style={{ padding: "14px 12px", fontSize: 13, fontWeight: 700 }}>{item.title || "—"}</td>
-                      <td style={{ padding: "14px 12px", fontSize: 12, maxWidth: 340, lineHeight: 1.45 }}>{item.message || "—"}</td>
-                      <td style={{ padding: "14px 12px", fontSize: 12 }}>{item.user_id ?? "—"}</td>
-                      <td style={{ padding: "14px 12px", fontSize: 11, color: "#64748b", whiteSpace: "pre-wrap", wordBreak: "break-word", maxWidth: 320 }}>{item.metadata_json || "—"}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </div>
+                          <p
+                            style={{
+                              margin: 0,
+                              color: "#475569",
+                              fontSize: 9.5,
+                              fontWeight: 600,
+                              textTransform: "uppercase",
+                              letterSpacing: "0.06em",
+                              lineHeight: 1.1,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {label}
+                          </p>
+                          <p
+                            style={{
+                              margin: "4px 0 0",
+                              color: "#0f172a",
+                              fontSize: 15,
+                              fontWeight: 700,
+                              lineHeight: 1,
+                            }}
+                          >
+                            {formatNumber(value)}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <LoadMoreButton shown={shown} total={users.length} onLoad={() => setShown(users.length)} />
+          </>
+        )}
+      </SectionShell>
     </div>
+  );
+}
+
+/* ─── Recent Activity ─── */
+function RecentActivitySection({ activities, loading }: { activities: RecentActivity[]; loading: boolean }) {
+  const [shown, setShown] = useState(INITIAL_SHOW);
+  useEffect(() => { setShown(INITIAL_SHOW); }, [activities]);
+
+  const visible = activities.slice(0, shown);
+
+  return (
+    <SectionShell title="Recent admin activity" description="Latest read-only ops audit events." badge={`Latest ${activities.length || 10}`}>
+      {loading ? <TableSkeleton /> : activities.length === 0 ? (
+        <div style={{ padding: 32, textAlign: "center" }}>
+          <h3 style={{ margin: 0, color: "#0f172a", fontSize: 15, fontWeight: 600 }}>No recent activity</h3>
+          <p style={{ margin: "8px auto 0", color: "#64748b", fontSize: 13, fontWeight: 400, maxWidth: 440 }}>Ops audit activity will appear here after admins perform tracked actions.</p>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "grid", gap: 10, padding: 18 }}>
+            {visible.map((activity, i) => {
+              const entityType = activity.entityType || activity.entity_type || "Unknown entity";
+              const entityId = activity.entityId || activity.entity_id || "N/A";
+              const staffUser = getPersonLabel(activity.staffUser || activity.staff_user, activity.staffName || activity.staff_name, activity.staffEmail || activity.staff_email);
+              const createdAt = activity.createdAt || activity.created_at;
+              const metaPreview = formatMetaPreview(activity);
+
+              return (
+                <article key={String(activity.id || `${activity.action}-${entityType}-${entityId}-${i}`)} style={{ minWidth: 0, border: "1px solid #e2e8f0", borderRadius: 14, background: "#ffffff", padding: "14px 16px", boxShadow: "0 1px 6px rgba(15,23,42,0.05)" }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ minWidth: 0, flex: "1 1 240px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", border: "1px solid #bfdbfe", background: "#eff6ff", color: "#2563eb", borderRadius: 999, padding: "4px 10px", fontSize: 12, fontWeight: 500, whiteSpace: "nowrap" }}>
+                          {formatLabel(activity.action || "Unknown action")}
+                        </span>
+                        <span style={{ color: "#475569", fontSize: 13, fontWeight: 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+                          {formatLabel(entityType)} · {String(entityId)}
+                        </span>
+                      </div>
+                      <p title={metaPreview} style={{ margin: "8px 0 0", color: "#64748b", fontSize: 13, fontWeight: 400, lineHeight: 1.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+                        {metaPreview}
+                      </p>
+                    </div>
+                    <div style={{ minWidth: 160, textAlign: "right", flexShrink: 0 }}>
+                      <p title={staffUser} style={{ margin: 0, color: "#0f172a", fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{staffUser}</p>
+                      <p style={{ margin: "5px 0 0", color: "#64748b", fontSize: 12, fontWeight: 400, whiteSpace: "nowrap" }}>{formatDateTime(createdAt)}</p>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+          <LoadMoreButton shown={shown} total={activities.length} onLoad={() => setShown(activities.length)} />
+        </>
+      )}
+    </SectionShell>
+  );
+}
+
+/* ══════════════════════════════════════
+   DASHBOARD PAGE
+══════════════════════════════════════ */
+export default function DashboardPage() {
+  const router = useRouter();
+  const [staff, setStaff] = useState<StaffMe | null>(null);
+  const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [recentBookings, setRecentBookings] = useState<RecentBooking[]>([]);
+  const [recentUsers, setRecentUsers] = useState<RecentUser[]>([]);
+  const [recentActivity, setRecentActivity] = useState<RecentActivity[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [bookingsLoading, setBookingsLoading] = useState(true);
+  const [usersLoading, setUsersLoading] = useState(true);
+  const [activityLoading, setActivityLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [bookingsError, setBookingsError] = useState<string | null>(null);
+  const [usersError, setUsersError] = useState<string | null>(null);
+  const [activityError, setActivityError] = useState<string | null>(null);
+
+  function getErrorMessage(r: PromiseSettledResult<unknown>, fallback: string): string | null {
+    if (r.status === "fulfilled") return null;
+    return r.reason instanceof Error ? r.reason.message : fallback;
+  }
+  function redirectIfUnauthorized(msgs: Array<string | null>): boolean {
+    if (!msgs.some((m) => m === "Unauthorized")) return false;
+    clearToken(); router.replace("/login"); return true;
+  }
+
+  async function loadDashboard(isRefresh = false) {
+    if (!getToken()) { router.replace("/login"); return; }
+    if (isRefresh) setRefreshing(true);
+    setLoading(true); setBookingsLoading(true); setUsersLoading(true); setActivityLoading(true);
+    setError(null); setBookingsError(null); setUsersError(null); setActivityError(null);
+
+    const [staffR, summaryR, bookingsR, usersR, activityR] = await Promise.allSettled([
+      getCurrentStaff(), getDashboardSummary(), getRecentBookings(10), getRecentUsers(10), getRecentActivity(10),
+    ]);
+
+    const summaryErr = getErrorMessage(summaryR, "Dashboard summary could not load");
+    const bookingsErr = getErrorMessage(bookingsR, "Recent bookings could not load");
+    const usersErr = getErrorMessage(usersR, "Recent users could not load");
+    const activityErr = getErrorMessage(activityR, "Recent admin activity could not load");
+    const staffErr = getErrorMessage(staffR, "Admin session could not load");
+
+    if (redirectIfUnauthorized([staffErr, summaryErr, bookingsErr, usersErr, activityErr])) return;
+
+    if (staffR.status === "fulfilled") setStaff(staffR.value);
+    if (summaryR.status === "fulfilled") setSummary(summaryR.value); else setSummary(null);
+    if (bookingsR.status === "fulfilled") setRecentBookings(bookingsR.value); else setRecentBookings([]);
+    if (usersR.status === "fulfilled") setRecentUsers(usersR.value); else setRecentUsers([]);
+    if (activityR.status === "fulfilled") setRecentActivity(activityR.value); else setRecentActivity([]);
+
+    setError(summaryErr || staffErr);
+    setBookingsError(bookingsErr); setUsersError(usersErr); setActivityError(activityErr);
+    setLoading(false); setBookingsLoading(false); setUsersLoading(false); setActivityLoading(false); setRefreshing(false);
+  }
+
+  useEffect(() => { loadDashboard(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  function logout() { clearToken(); router.replace("/login"); }
+
+  const cards = useMemo(() => (summary ? buildCards(summary) : []), [summary]);
+  const mainCards = cards.slice(0, 4);
+  const secondaryCards = cards.slice(4, 8);
+  const systemCards = cards.slice(8);
+
+  return (
+    <>
+      <style jsx global>{`
+        /* ── Summary overview layout ── */
+        .summary-overview-shell {
+          border: 1px solid #dbeafe;
+          background: rgba(255, 255, 255, 0.78);
+          border-radius: 24px;
+          padding: 18px;
+          box-shadow: 0 10px 28px rgba(15, 23, 42, 0.04);
+        }
+
+        .summary-main-grid,
+        .summary-secondary-grid {
+          display: grid;
+          gap: 14px;
+          width: 100%;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+
+        .summary-secondary-grid {
+          margin-top: 14px;
+        }
+
+        .summary-system-strip {
+          margin-top: 14px;
+          padding-top: 14px;
+          border-top: 1px solid #eaf1fb;
+          display: flex;
+          gap: 12px;
+          flex-wrap: wrap;
+        }
+
+        .summary-system-item {
+          flex: 1 1 220px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          border: 1px solid #e8eef8;
+          background: #f8fbff;
+          border-radius: 14px;
+          padding: 12px 14px;
+          color: #64748b;
+          font-size: 13px;
+          min-width: 0;
+        }
+
+        .summary-system-item span {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .summary-system-item strong {
+          color: #0f172a;
+          font-size: 18px;
+          font-weight: 700;
+          line-height: 1;
+          white-space: nowrap;
+        }
+
+        @media (max-width: 1200px) {
+          .summary-main-grid,
+          .summary-secondary-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 640px) {
+          .summary-overview-shell {
+            padding: 12px;
+            border-radius: 20px;
+          }
+
+          .summary-main-grid,
+          .summary-secondary-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .summary-system-strip {
+            gap: 10px;
+          }
+
+          .summary-system-item {
+            flex-basis: 100%;
+          }
+        }
+
+        @media (min-width: 1800px) {
+          .summary-overview-shell {
+            padding: 20px;
+          }
+        }
+
+        /* ── Load more button hover ── */
+        .load-more-btn:hover {
+          background: #eff6ff !important;
+          border-color: #93c5fd !important;
+        }
+
+        /* ── Row hover in tables ── */
+        .dash-table-row:hover { background: #fafcff; }
+
+        /* ── Responsive page container ── */
+        .dash-page {
+          min-height: 100vh;
+          background: #f6f9ff;
+          color: #0f172a;
+          overflow-x: hidden;
+        }
+        .dash-inner {
+          width: 100%;
+          max-width: 1600px;
+          margin: 0 auto;
+          padding: 28px clamp(14px, 3vw, 40px);
+          box-sizing: border-box;
+        }
+        @media (min-width: 2560px) {
+          .dash-inner { max-width: 2200px; padding: 40px clamp(24px, 3vw, 60px); }
+        }
+
+        /* ── Page header ── */
+        .dash-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+          flex-wrap: wrap;
+          margin-bottom: 24px;
+        }
+        .dash-header-actions {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        /* ── User row responsive (single-column list) ── */
+        .dash-user-row-stats { display: flex; gap: 10px; flex-shrink: 0; }
+        .dash-user-row-meta  { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+
+        @media (max-width: 640px) {
+          /* Stack avatar+name on the left, stats hidden / wrap under */
+          .dash-user-row-stats { display: none; }
+          .dash-user-row-meta  { display: none; }
+        }
+        @media (max-width: 860px) {
+          .dash-user-row-stats { gap: 8px; }
+          .dash-user-row-meta  { display: none; }
+        }
+      `}</style>
+
+      <div className="dash-page">
+        <div className="dash-inner">
+
+          {/* Page header */}
+          <header className="dash-header">
+            <div style={{ minWidth: 0 }}>
+              <p style={{ margin: "0 0 6px", color: "#2563eb", fontSize: 12, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase" }}>Admin Dashboard</p>
+              <h1 style={{ margin: 0, fontSize: "clamp(24px,4vw,36px)", fontWeight: 700, lineHeight: 1.1, letterSpacing: "-0.04em", color: "#0f172a" }}>Summary overview</h1>
+              <p style={{ margin: "8px 0 0", color: "#64748b", fontSize: 14, fontWeight: 400 }}>Live read-only metrics and latest records from admin APIs.</p>
+            </div>
+            <div className="dash-header-actions">
+              {staff && (
+                <div style={{ border: "1px solid #dbeafe", background: "#ffffff", borderRadius: 999, padding: "8px 14px", color: "#334155", fontSize: 13, fontWeight: 400, boxShadow: "0 2px 10px rgba(15,23,42,0.06)", whiteSpace: "nowrap" }}>
+                  <strong style={{ color: "#0f172a", fontWeight: 600 }}>{staff.name || "Admin"}</strong>
+                  <span style={{ color: "#64748b" }}> · </span>
+                  <span>{staff.email}</span>
+                </div>
+              )}
+              <button type="button" onClick={() => loadDashboard(true)} disabled={refreshing} style={{ border: "1px solid #bfdbfe", borderRadius: 999, background: refreshing ? "#eff6ff" : "#ffffff", color: "#2563eb", padding: "9px 16px", fontSize: 13, fontWeight: 500, cursor: refreshing ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>
+                {refreshing ? "Refreshing…" : "Refresh"}
+              </button>
+              <button type="button" onClick={logout} style={{ border: "1px solid #e2e8f0", borderRadius: 999, background: "#ffffff", color: "#475569", padding: "9px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+                Logout
+              </button>
+            </div>
+          </header>
+
+          {/* Summary error */}
+          {error && <ApiErrorCard title="Dashboard data could not load" message={error} onRetry={() => loadDashboard(true)} />}
+
+          {/* Summary cards */}
+          {loading ? <CardSkeletonGrid /> : summary ? (
+            <section className="summary-overview-shell">
+              <div className="summary-main-grid">
+                {mainCards.map((card) => (
+                  <SummaryCardView key={card.title} card={card} />
+                ))}
+              </div>
+
+              <div className="summary-secondary-grid">
+                {secondaryCards.map((card) => (
+                  <SummaryCardView key={card.title} card={card} compact />
+                ))}
+              </div>
+
+              <div className="summary-system-strip">
+                {systemCards.map((card) => (
+                  <div key={card.title} className="summary-system-item">
+                    <span>{card.title}</span>
+                    <strong>{formatNumber(card.value)}</strong>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : !error ? (
+            <section style={{ border: "1px solid #dbeafe", background: "#ffffff", borderRadius: 20, padding: 28, textAlign: "center", color: "#64748b", fontSize: 14, fontWeight: 400 }}>No dashboard summary data available.</section>
+          ) : null}
+
+          {/* Sections */}
+          {bookingsError && <ApiErrorCard title="Recent bookings could not load" message={bookingsError} onRetry={() => loadDashboard(true)} />}
+          <RecentBookingsTable bookings={recentBookings} loading={bookingsLoading} />
+
+          {usersError && <ApiErrorCard title="Recent users could not load" message={usersError} onRetry={() => loadDashboard(true)} />}
+          <RecentUsersSection users={recentUsers} loading={usersLoading} />
+
+          {activityError && <ApiErrorCard title="Recent admin activity could not load" message={activityError} onRetry={() => loadDashboard(true)} />}
+          <RecentActivitySection activities={recentActivity} loading={activityLoading} />
+
+        </div>
+      </div>
+    </>
   );
 }
